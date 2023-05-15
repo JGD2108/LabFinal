@@ -11,7 +11,7 @@ import numpy as np
 
 # Define the server's IP address and port
 SERVER_IP = '10.20.46.34'
-SERVER_PORT = 9090
+SERVER_PORT = 1234
 
 # Create a socket object
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -93,3 +93,4 @@ client_socket.sendall(history_data)
 # Close the sockets
 client_socket.close()
 server_socket.close()
+

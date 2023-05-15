@@ -1,36 +1,86 @@
 import socket
 import pickle
-import numpy as np
+import struct
 
-HOST = '192.168.47.199'  # Replace with the IP address of the server
-PORT = 49152
-
-# Generate some sample data for the regression
-X = np.array([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9]])
-y = np.array([1, 3, 2, 5, 7, 8, 8, 9, 10, 12])
-
-# Set hyperparameters
-hyperparameters = {'X': X, 'y': y}
+# Define the server's IP address and port
+SERVER_IP = '10.20.46.34'
+SERVER_PORT = 9090
+SERVER_PORT1 = 1234
 
 # Create a socket object
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    try:
-        # Connect to the server
-        s.connect((HOST, PORT))
-        
-        # Send hyperparameters to the server
-        data = pickle.dumps(hyperparameters)
-        s.sendall(data)
-        
-        # Receive the trained model from the server
-        response = s.recv(1024)
-        model = pickle.loads(response)
-        
-        # Use the trained model for predictions or further processing
-        y_pred = model.predict(X)
-        print("Predicted values:", y_pred)
-        
-    except Exception as e:
-        print(f"An error occurred: {e}")
-    finally:
-        s.close()
+client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client_socket1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+# Connect to the server
+client_socket.connect((SERVER_IP, SERVER_PORT))
+print('Connected to the server 1.')
+
+client_socket1.connect((SERVER_IP, SERVER_PORT1))
+print('Connected to the server 2.')
+
+# Define the test size and random state
+test_size = 0.2
+random_state = 42
+
+# Serialize the test size and random state
+data = pickle.dumps((test_size, random_state))
+
+# Get the data length
+data_length = len(data)
+
+# Pack the data length into the header
+header = struct.pack('!I', data_length)
+
+# Send the header to the server
+client_socket.sendall(header)
+
+# Send the data to the server
+client_socket.sendall(data)
+
+test_size = 0.3
+random_state = 40
+
+# Serialize the test size and random state
+data = pickle.dumps((test_size, random_state))
+
+# Get the data length
+data_length = len(data)
+
+# Pack the data length into the header
+header = struct.pack('!I', data_length)
+
+# Send the header to the server
+client_socket1.sendall(header)
+
+# Send the data to the server
+client_socket1.sendall(data)
+
+# Receive the response from the server
+response_data = b''
+while True:
+    chunk = client_socket.recv(4096)
+    if not chunk:
+        break
+    response_data += chunk
+
+# Deserialize the received response
+response = pickle.loads(response_data)
+
+# Print the received response
+print('Received response 1:', response)
+
+response_data = b''
+while True:
+    chunk = client_socket1.recv(4096)
+    if not chunk:
+        break
+    response_data += chunk
+
+# Deserialize the received response
+response = pickle.loads(response_data)
+
+# Print the received response
+print('Received response 2:', response)
+
+# Close the socket
+client_socket.close()
