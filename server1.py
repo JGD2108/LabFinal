@@ -1,16 +1,35 @@
 import socket
 import pickle
 import struct
-import tensorflow as tf
-from tensorflow.keras import layers, models, optimizers
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
-from sklearn import preprocessing
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import holoviews.plotting.mpl
+import seaborn as sns
+import holoviews as hv
+from holoviews.plotting import mpl
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.ensemble import RandomForestClassifier
+import xgboost as xgb
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.metrics import accuracy_score
+# import packages for hyperparameters tuning
+from hyperopt import STATUS_OK, Trials, fmin, hp, tpe
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.metrics import f1_score, roc_auc_score,accuracy_score, auc, roc_curve, classification_report 
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import RandomizedSearchCV
+from holoviews import opts
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 
 # Define the server's IP address and port
-SERVER_IP = '10.20.46.34'
+SERVER_IP = '192.168.80.11'
 SERVER_PORT = 9090
 
 # Create a socket object
@@ -28,67 +47,78 @@ client_socket, client_address = server_socket.accept()
 print('Client connected:', client_address)
 
 # Receive the header from the client
-header_size = 4
 header_data = b''
-while len(header_data) < header_size:
-    chunk = client_socket.recv(header_size - len(header_data))
+while len(header_data) < 4:
+    chunk = client_socket.recv(4 - len(header_data))
     if not chunk:
         break
     header_data += chunk
 
-# Unpack the header to get the data length
+# Unpack the header
 data_length = struct.unpack('!I', header_data)[0]
 
 # Receive the data from the client
 data = b''
 while len(data) < data_length:
-    chunk = client_socket.recv(data_length - len(data))
-    if not chunk:
-        break
+    chunk = client_socket.recv(4096)
     data += chunk
 
-# Deserialize the received data
-test_size, random_state = pickle.loads(data)
+# Access the variables
+variables = pickle.loads(data)
+
+# Access the variables
+solver = variables['solver']
+random_state = int(variables['random_state'])
+
+
 
 # Use the test size and random state as needed in your code
-print('Received test size:', test_size)
-print('Received random state:', random_state)
+print('Received solver:', solver)
+print('Received space:', random_state)
+# Deserialize the received data
 
-df = pd.read_csv("model.csv")
-Num_features=df.select_dtypes(include=[np.number]).columns
-df[Num_features]=preprocessing.MinMaxScaler().fit_transform(df[Num_features])
+df_train = pd.read_csv("New_train.csv")
+df_test = pd.read_csv("New_test.csv")
 
-# Dividir en datos de entrenamiento y prueba
-X = df[Num_features]
-y = df['Distance']
+X = df_train.drop(['Response'],axis=1)
+y = df_train['Response']
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = test_size, random_state= random_state)
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
+X_train,X_test,y_train,y_test = train_test_split(X,y,test_size=0.2,random_state=42)
 
-# Crear conjunto de datos de TensorFlow
-train_data = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-test_data = tf.data.Dataset.from_tensor_slices((X_test, y_test))
+print('Positive cases % in validation set: ', round(100 * len(y_test[y_test == 1]) / len(y_test), 3), '%')
+print('Positive cases % in train set: ', round(100 * len(y_train[y_train == 1]) / len(y_train), 3), '%')
 
-# Definir modelo de red neuronal
-model = models.Sequential()
-model.add(layers.Dense(64, activation='relu', input_shape=(X_train.shape[1],)))
-model.add(layers.Dense(64, activation='relu'))
-model.add(layers.Dense(1))
+GLM = LogisticRegression(solver=solver, random_state=random_state)
+GLM_fit = GLM.fit(X_train, y_train)
+GLM_probability = pd.DataFrame(GLM_fit.predict_proba(X_test))
+GLM_probability.columns = GLM_probability.columns.astype(str)
 
-# Compilar modelo
-model.compile(optimizer=optimizers.Adam(lr=0.001), loss='mse', metrics=['mae'])
+GLM_probability.mean()
 
-# Entrenar modelo
-history = model.fit(train_data.shuffle(1000).batch(128), epochs=1, validation_data=test_data.batch(128))
+print("We expect: " + format(round(float(GLM_probability.iloc[:, 1].mean() * X_test.shape[0]))) + " 1's.")
+
+
+plt.plot(GLM_probability.iloc[:, 1])
+plt.xlabel('Values')
+plt.ylabel('Density')
+plt.title('Probability of retention')
+plt.show()
+fpr, tpr, _ = roc_curve(y_test, GLM_fit.predict_proba(X_test)[:,1])
+
+plt.title('Logistic regression ROC curve')
+plt.xlabel('FPR (Precision)')
+plt.ylabel('TPR (Recall)')
+
+plt.plot(fpr,tpr)
+plt.plot((0,1), ls='dashed',color='black')
+plt.show()
+print ('Area under curve (AUC): ' ,format(round(auc(fpr,tpr),5)))
+# Serialize the training history
+auc_value = auc(fpr,tpr)
 
 # Serialize the training history
-history_data = pickle.dumps(history.history)
-#print(history_data)
-
-# Send the training history back to the client
-client_socket.sendall(history_data)
+data = pickle.dumps(auc_value)
+client_socket.sendall(data)
 
 # Close the sockets
 client_socket.close()

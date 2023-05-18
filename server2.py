@@ -8,9 +8,32 @@ from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import holoviews as hv
+
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.ensemble import RandomForestClassifier
+import xgboost as xgb
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.metrics import accuracy_score
+# import packages for hyperparameters tuning
+from hyperopt import STATUS_OK, Trials, fmin, hp, tpe
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.metrics import f1_score, roc_auc_score,accuracy_score, auc, roc_curve, classification_report 
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import RandomizedSearchCV
+from holoviews import opts
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 
 # Define the server's IP address and port
-SERVER_IP = '10.20.46.34'
+SERVER_IP = '192.168.80.11'
 SERVER_PORT = 1234
 
 # Create a socket object
@@ -28,15 +51,14 @@ client_socket, client_address = server_socket.accept()
 print('Client connected:', client_address)
 
 # Receive the header from the client
-header_size = 4
 header_data = b''
-while len(header_data) < header_size:
-    chunk = client_socket.recv(header_size - len(header_data))
+while len(header_data) < 4:
+    chunk = client_socket.recv(4 - len(header_data))
     if not chunk:
         break
     header_data += chunk
 
-# Unpack the header to get the data length
+# Unpack the header
 data_length = struct.unpack('!I', header_data)[0]
 
 # Receive the data from the client
@@ -47,48 +69,111 @@ while len(data) < data_length:
         break
     data += chunk
 
+
 # Deserialize the received data
-test_size, random_state = pickle.loads(data)
+random_search, space = pickle.loads(data)
 
 # Use the test size and random state as needed in your code
-print('Received test size:', test_size)
-print('Received random state:', random_state)
+print('Received random_search:', random_search)
+print('Received space:', space)
+df_train = pd.read_csv("New_train.csv")
+df_test = pd.read_csv("New_test.csv")
 
-df = pd.read_csv("model.csv")
-Num_features=df.select_dtypes(include=[np.number]).columns
-df[Num_features]=preprocessing.MinMaxScaler().fit_transform(df[Num_features])
+X = df_train.drop(['Response'],axis=1)
+y = df_train['Response']
 
-# Dividir en datos de entrenamiento y prueba
-X = df[Num_features]
-y = df['Distance']
+X_train,X_test,y_train,y_test = train_test_split(X,y,test_size=0.2,random_state=42)
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = test_size, random_state= random_state)
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
+print('Positive cases % in validation set: ', round(100 * len(y_test[y_test == 1]) / len(y_test), 3), '%')
+print('Positive cases % in train set: ', round(100 * len(y_train[y_train == 1]) / len(y_train), 3), '%')
 
-# Crear conjunto de datos de TensorFlow
-train_data = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-test_data = tf.data.Dataset.from_tensor_slices((X_test, y_test))
 
-# Definir modelo de red neuronal
-model = models.Sequential()
-model.add(layers.Dense(64, activation='relu', input_shape=(X_train.shape[1],)))
-model.add(layers.Dense(64, activation='relu'))
-model.add(layers.Dense(1))
+clf = RandomForestClassifier()
+model = RandomizedSearchCV(estimator = clf, param_distributions = random_search, n_iter = 10, 
+                               cv = 4, verbose= 1, random_state= 42, n_jobs = -1)
+model.fit(X_train,y_train)
 
-# Compilar modelo
-model.compile(optimizer=optimizers.Adam(lr=0.001), loss='mse', metrics=['mae'])
+y_pred=model.predict(X_test)
 
-# Entrenar modelo
-history = model.fit(train_data.shuffle(1000).batch(128), epochs=1, validation_data=test_data.batch(128))
+print (classification_report(y_test, y_pred))
+
+y_score = model.predict_proba(X_test)[:,1]
+fpr, tpr, _ = roc_curve(y_test, y_score)
+
+plt.title('Random Forest ROC curve: CC Fraud')
+plt.xlabel('FPR (Precision)')
+plt.ylabel('TPR (Recall)')
+
+plt.plot(fpr,tpr)
+plt.plot((0,1), ls='dashed',color='black')
+plt.show()
+print ('Area under curve (AUC): ', auc(fpr,tpr))
+
+
+space={ 'max_depth': hp.quniform("max_depth", 3,10,1),
+        'gamma': hp.uniform ('gamma', 1,5),
+        'reg_alpha' : hp.quniform('reg_alpha', 40,100,1),
+        'reg_lambda' : hp.uniform('reg_lambda', 0,0.5),
+        'colsample_bytree' : hp.uniform('colsample_bytree', 0.5,1),
+        'min_child_weight' : hp.quniform('min_child_weight', 0, 5, 1),
+        'n_estimators': 300,
+        'seed': 0
+      }
+
+def objective(space):
+    clf=xgb.XGBClassifier(
+                    n_estimators =space['n_estimators'], max_depth = int(space['max_depth']), gamma = space['gamma'],
+                    reg_alpha = int(space['reg_alpha']),min_child_weight=int(space['min_child_weight']),
+                    colsample_bytree=int(space['colsample_bytree']))
+    
+    evaluation = [( X_train, y_train), ( X_test, y_test)]
+    
+    clf.fit(X_train, y_train,
+            eval_set=evaluation, eval_metric="auc",
+            early_stopping_rounds=10,verbose=False)
+    
+
+    pred = clf.predict(X_test)
+    y_score = model.predict_proba(X_test)[:,1]
+    accuracy = accuracy_score(y_test, pred>0.5)
+    Roc_Auc_Score = roc_auc_score(y_test, y_score)
+    print ("ROC-AUC Score:",Roc_Auc_Score)
+    print ("SCORE:", accuracy)
+    return {'loss': -Roc_Auc_Score, 'status': STATUS_OK }
+
+trials = Trials()
+
+best_hyperparams = fmin(fn = objective,
+                        space = space,
+                        algo = tpe.suggest,
+                        max_evals = 10,
+                        trials = trials)
+
+print("The best hyperparameters are : ","\n")
+print(best_hyperparams)
+
+xgb_model=xgb.XGBClassifier(n_estimators = space['n_estimators'], max_depth = 7, gamma = 1.6267154347279935, reg_lambda = 0.03803056245297226,
+                            reg_alpha = 54.0, min_child_weight=5.0,colsample_bytree = 0.5610464094502983 )
+
+xgb_model.fit(X_train,y_train)
+
+y_score = xgb_model.predict_proba(X_test)[:, 1]
+fpr, tpr, _ = roc_curve(y_test, y_score)
+
+plt.title('XGBoost ROC curve')
+plt.xlabel('False Positive Rate (FPR)')
+plt.ylabel('True Positive Rate (TPR)')
+
+plt.plot(fpr, tpr)
+plt.plot([0, 1], [0, 1], linestyle='dashed', color='black')  # Changed plot to use [0, 1] instead of (0, 1)
+plt.show()
+
+print('Area under curve (AUC):', auc(fpr, tpr))
+auc_value = auc(fpr,tpr)
 
 # Serialize the training history
-history_data = pickle.dumps(history.history)
-#print(history_data)
-
-# Send the training history back to the client
-client_socket.sendall(history_data)
+data = pickle.dumps(auc_value)
+client_socket.sendall(data)
 
 # Close the sockets
 client_socket.close()
